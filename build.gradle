@@ -1,0 +1,50 @@
+apply plugin: 'java'
+apply plugin: 'eclipse'
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+version = '1.0'
+
+jar {
+	manifest {
+		attributes 	'Implementation-Title': 'Mojo Loop Decomposition Plan Plugin',
+					'Implementation-Version': version
+	}
+}
+
+task fatJar(type: Jar) {
+	manifest {
+		attributes 	'Implementation-Title': 'Mojo Loop Decomposition Plan Plugin',
+					'Implementation-Version': version
+	}
+    baseName = project.name + '-all'
+    from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
+    with jar
+}
+
+repositories {
+    jcenter()
+	mavenCentral()
+	flatDir {
+		dirs 'libs'
+	}
+	maven { url "https://jitpack.io" }
+}
+
+dependencies {
+	compile group: 'org.apache.logging.log4j', name: 'log4j-api', version: '2.7'
+	compile 'org.apache.logging.log4j:log4j-core:2.7'
+	compile 'com.github.guybrushPrince:mojo.core:master'
+    testCompile 'junit:junit:4.12'
+}
+
+javadoc {
+	source = sourceSets.main.allJava
+	classpath = configurations.compile
+}
+
+task listJars {
+    doLast {
+        configurations.compile.each { File file -> println file.name }
+    }
+}
