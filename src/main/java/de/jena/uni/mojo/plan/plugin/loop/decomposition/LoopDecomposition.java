@@ -325,6 +325,7 @@ public class LoopDecomposition  extends Analysis {
                     this.graph,
                     this.recursionDepth + 1);
             errors.addAll(loopDecomposition.compute());
+            edgesVisited += loopDecomposition.getEdgesVisited();
             workflowGraphs.addAll(loopDecomposition.getDecomposition());
 
             // Store the information to reduce the workflow graph later
@@ -346,6 +347,7 @@ public class LoopDecomposition  extends Analysis {
                 this.graph,
                 this.recursionDepth + 1);
         errors.addAll(loopDecomposition.compute());
+        edgesVisited += loopDecomposition.getEdgesVisited();
         workflowGraphs.addAll(loopDecomposition.getDecomposition());
 
         // Report the number of edges
@@ -733,6 +735,14 @@ public class LoopDecomposition  extends Analysis {
                 }
             }
         }
+    }
+
+    /**
+     * Get the number of visited edges.
+     * @return Number of visited edges.
+     */
+    protected int getEdgesVisited() {
+        return this.edgesVisited;
     }
 
     private class LoopInformation {
