@@ -180,6 +180,7 @@ public class LoopDecomposition extends Analysis {
         BitSet exitOutgoing = new BitSet(edges.size());
         BitSet entryIncoming = new BitSet(edges.size());
         for (BitSet loop : loops) {
+            this.edgesVisited++;
             exitOutgoing.clear();
             entryIncoming.clear();
 
@@ -276,7 +277,7 @@ public class LoopDecomposition extends Analysis {
             // Initialize each edge of the component with an empty information set.
             for (int i = extendedLoop.nextSetBit(0); i >= 0; i = extendedLoop.nextSetBit(i + 1)) {
                 // An edge is visited
-                edgesVisited++;
+                this.edgesVisited++;
 
                 doBody.put(i, new BitSet(maxInfo));
                 gen.put(i, new BitSet(maxInfo));
@@ -296,7 +297,7 @@ public class LoopDecomposition extends Analysis {
             BitSet subset = new BitSet(maxInfo);
             while (!workingList.isEmpty()) {
                 // An edge is visited
-                edgesVisited++;
+                this.edgesVisited++;
 
                 in.clear();
                 subset.clear();
@@ -311,7 +312,7 @@ public class LoopDecomposition extends Analysis {
                 // Build IN information
                 for (int j = incoming.nextSetBit(0); j >= 0; j = incoming.nextSetBit(j + 1)) {
                     // An edge is visited
-                    edgesVisited++;
+                    this.edgesVisited++;
                     in.or(doBody.get(j));
                 }
                 // Remove KILL information
@@ -330,7 +331,7 @@ public class LoopDecomposition extends Analysis {
                     outgoing.and(extendedLoop);
                     for (int j = outgoing.nextSetBit(0); j >= 0; j = outgoing.nextSetBit(j + 1)) {
                         // An edge is visited
-                        edgesVisited++;
+                        this.edgesVisited++;
 
                         workingList.add(j);
                     }
@@ -341,7 +342,7 @@ public class LoopDecomposition extends Analysis {
             BitSet doBodyComponent = new BitSet(edges.size());
             for (int i = loop.nextSetBit(0); i >= 0; i = loop.nextSetBit(i + 1)) {
                 // An edge is visited
-                edgesVisited++;
+                this.edgesVisited++;
 
                 BitSet inf = doBody.get(i);
                 if (!inf.isEmpty()) {
@@ -417,13 +418,13 @@ public class LoopDecomposition extends Analysis {
         // Determine a set representing the loop exits.
         BitSet cutoffNodes = new BitSet(map.length);
         for (int i = cutoff.nextSetBit(0); i >= 0; i = cutoff.nextSetBit(i + 1)) {
-            edgesVisited++;
+            this.edgesVisited++;
             cutoffNodes.set(edges.get(i).src.getId());
         }
         // Determine a set representing the loop entries.
         BitSet entryNodes = new BitSet(map.length);
         for (int i = innerIncoming.nextSetBit(0); i >= 0; i = innerIncoming.nextSetBit(i + 1)) {
-            edgesVisited++;
+            this.edgesVisited++;
             entryNodes.set(edges.get(i).tgt.getId());
         }
 
@@ -441,7 +442,9 @@ public class LoopDecomposition extends Analysis {
         // An iterative DPE
         boolean stable;
         do {
+            this.edgesVisited++;
             while (!current.isEmpty()) {
+                this.edgesVisited++;
                 int c = current.nextSetBit(0);
                 current.clear(c);
                 visited.set(c);
@@ -469,6 +472,7 @@ public class LoopDecomposition extends Analysis {
                 // Not each loop exit reached.
                 tmpEdges.clear();
                 for (int i = reached.nextSetBit(0); i >= 0; i = reached.nextSetBit(i + 1)) {
+                    this.edgesVisited++;
                     tmpEdges.or(outgoing[i]);
                 }
                 tmpEdges.andNot(visited);
@@ -477,7 +481,7 @@ public class LoopDecomposition extends Analysis {
             } else {
                 tmp.clear();
                 for (int i = entryNodes.nextSetBit(0); i >= 0; i = entryNodes.nextSetBit(i + 1)) {
-                    edgesVisited++;
+                    this.edgesVisited++;
                     tmpEdges.clear();
                     tmpEdges.or(incoming[i]);
                     tmpEdges.and(innerIncoming);
@@ -488,6 +492,7 @@ public class LoopDecomposition extends Analysis {
                 if (tmp.cardinality() >= 2) {
                     tmpEdges.clear();
                     for (int i = reached.nextSetBit(0); i >= 0; i = reached.nextSetBit(i + 1)) {
+                        this.edgesVisited++;
                         tmpEdges.or(outgoing[i]);
                     }
                     tmpEdges.andNot(visited);
@@ -820,6 +825,7 @@ public class LoopDecomposition extends Analysis {
             }
             // Add the newly created nodes to the node list.
             for (WGNode node: newNodes) {
+                this.edgesVisited++;
                 nodes.put(node.getId(), node);
             }
         }
@@ -844,12 +850,12 @@ public class LoopDecomposition extends Analysis {
         // Create a node map.
         int length = 0;
         for (WGNode node: nodes) {
-            edgesVisited++;
+            this.edgesVisited++;
             length = Math.max(node.getId(), length) + 1;
         }
         WGNode[] map = new WGNode[length];
         for (WGNode node : nodes) {
-            edgesVisited++;
+            this.edgesVisited++;
             if (node != null) {
                 map[node.getId()] = node;
             }

@@ -133,6 +133,7 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
         // Define sets thar are recycled.
         BitSet exitOutgoing = new BitSet(edges.size());
         for (BitSet loop : loops) {
+            this.edgesVisited++;
             exitOutgoing.clear();
 
             // Sets describing the loop in detail.
@@ -215,6 +216,7 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
             BitSet doBody = new BitSet(loopIncoming.size());
             // As long as there are reachable edges in the working list, we perform the search.
             while (!workingList.isEmpty()) {
+                this.edgesVisited++;
                 // Get the current edge id of the list ...
                 int cur = workingList.nextSetBit(0);
                 // ... and remove it from the list.
@@ -225,7 +227,7 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
                 outgoing.andNot(cutoffEdges);
                 // ... and already visited edges ...
                 outgoing.andNot(doBody);
-                // TODO: ... and only those within the (extended) loop.
+                // ... and only those within the (extended) loop.
                 outgoing.and(extendedLoop);
                 // Add the remaining outgoing edges as part of the do-body and to the working list.
                 doBody.or(outgoing);
@@ -249,7 +251,7 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
             // Idea: Any unvisited edge is taken. From it, in all directions, the graph is visited as long as
             // it does not reach any edge already visited. During this search, all edges belong to the same fragment.
             while (!unvisited.isEmpty()) {
-                edgesVisited++;
+                this.edgesVisited++;
                 // Take the first edge out of it.
                 int cur = unvisited.nextSetBit(0);
                 unvisited.clear(cur);
@@ -267,7 +269,7 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
 
                 // As long as there are unvisited edges, search for the current fragment.
                 while (!unvisitedInFragment.isEmpty()) {
-                    edgesVisited++;
+                    this.edgesVisited++;
                     // Take the next unvisited edge out of it.
                     int unvis = unvisitedInFragment.nextSetBit(0);
                     unvisitedInFragment.clear(unvis);
@@ -301,6 +303,7 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
             // Step 2.5: Derive all loop fragment workflow graphs
             //
             for (BitSet fragment: fragments) {
+                this.edgesVisited++;
                 // The loop outgoing edges of the fragment are those of the loop within the fragment.
                 BitSet fragLoopOut = (BitSet) loopOutgoing.clone();
                 fragLoopOut.and(fragment);
