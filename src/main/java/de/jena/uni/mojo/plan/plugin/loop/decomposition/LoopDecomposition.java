@@ -31,12 +31,20 @@ import de.jena.uni.mojo.model.WorkflowGraph;
 import java.util.*;
 
 /**
- *
+ * Class LoopDecomposition.
+ * Extends a mojo analysis and performs a loop decomposition on a workflow graph described in the paper
+ * ""
+ * @author Dr. Dipl.-Inf. Thomas M. Prinz
  */
-public class LoopDecomposition  extends Analysis {
+public class LoopDecomposition extends Analysis {
 
     /**
-     * The sub workflow graphs of this graph.
+     * A serial version UID.
+     */
+    private static final long serialVersionUID = 5751831129981124751L;
+
+    /**
+     * The sub workflow graphs of this graph extracted through the loop decomposition.
      */
     protected final ArrayList<WorkflowGraph> workflowGraphs = new ArrayList<>();
 
@@ -103,7 +111,7 @@ public class LoopDecomposition  extends Analysis {
     protected BitSet freeIds;
 
     /**
-     * Constructor.
+     * Constructor. This should be used for the entry of the analysis.
      * @param graph The workflow graph.
      * @param map The node map.
      * @param reporter The reporter.
@@ -114,11 +122,10 @@ public class LoopDecomposition  extends Analysis {
         this.incoming = graph.getIncomingEdges();
         this.outgoing = graph.getOutgoingEdges();
         this.origin = graph;
-        this.recursionDepth = 0;
     }
 
     /**
-     * Constructor.
+     * Constructor. This constructor is used for recursive calls.
      * @param graph The workflow graph.
      * @param map The node map.
      * @param reporter The reporter.
@@ -140,19 +147,23 @@ public class LoopDecomposition  extends Analysis {
     protected List<Annotation> analyze() {
         // Determine the largest id to assign new ids.
         this.maxId = graph.getNodeSet().size();
+        // Determine the used ids so that unset ids can be recycled.
         this.freeIds = (BitSet) graph.getNodeSet().clone();
         this.freeIds.set(graph.getStart().getId());
         this.freeIds.set(graph.getEnd().getId());
 
         //
-        // Step 1: Perform strong component analysis.
+        // Step 1: Perform a strong component analysis and determine the strong components.
         //
         StrongComponentsAnalysis strongComponentsAnalysis = new StrongComponentsAnalysis(graph, map, reporter);
         strongComponentsAnalysis.compute();
-        ArrayList<BitSet> components = strongComponentsAnalysis.getComponents();
+        ArrayList<BitSet> loops = strongComponentsAnalysis.getComponents();
 
-        // If no cycles where found at all, return only the workflow graph.
-        if (components.size() == 0) {
+
+        //
+        // If no cycles were found at all, add this workflow graph and return an empty list of errors.
+        //
+        if (loops.size() == 0) {
             workflowGraphs.add(graph);
             return Collections.emptyList();
         }
@@ -160,66 +171,90 @@ public class LoopDecomposition  extends Analysis {
         //
         // Cycles found
         //
-
         WorkflowGraph graph = this.graph;
 
         //
-        // Step 2: Iterate over each loop.
+        // Step 2: Iterate over each loop (strongly connected component).
         //
-        for (BitSet component : components) {
+        // Define sets that are recycled.
+        BitSet exitOutgoing = new BitSet(edges.size());
+        BitSet entryIncoming = new BitSet(edges.size());
+        for (BitSet loop : loops) {
+            exitOutgoing.clear();
+            entryIncoming.clear();
+
+            // Sets describing the loop in detail.
             BitSet loopIncoming = new BitSet(edges.size());
             BitSet loopOutgoing = new BitSet(edges.size());
-            BitSet exitOutgoing = new BitSet(edges.size());
-            BitSet cutOutgoing = new BitSet(edges.size());
-            BitSet entryIncoming = new BitSet(edges.size());
 
             //
             // Step 2.1: Find loop entries and exits
             //
-            for (int e = component.nextSetBit(0); e >= 0; e = component.nextSetBit(e + 1)) {
+            // Iterate over each edge of the loop.
+            for (int e = loop.nextSetBit(0); e >= 0; e = loop.nextSetBit(e + 1)) {
+                this.edgesVisited++;
+                // Get the edge.
                 Edge edge = edges.get(e);
 
-                // Find loop entries
+                //
+                // Find loop entries (their incoming edges, respectively)
+                //
+                // Determine the incoming edges of the source node of the current edge.
                 BitSet in = incoming[edge.src.getId()];
+                // A loop entry has by definition at least two incoming edges (one from inside and one from outside the
+                // loop).
                 if (in.cardinality() >= 2) {
+                    // Determine those incoming edges that are *not* in the loop.
                     BitSet fromOut = (BitSet) in.clone();
-                    fromOut.andNot(component);
+                    fromOut.andNot(loop);
+
+                    // If this set is *not* empty, then there are incoming edges from outside the loop.
                     if (!fromOut.isEmpty()) {
-                        // Loop incoming edges.
+                        // edge and e, respectively, are the outgoing edge of a loop entry.
+                        // Add the incoming edges to the set of loop incoming edges.
                         loopIncoming.or(fromOut);
+                        // Determine the inner-loop incoming edges of the loop entry.
                         entryIncoming.or(in);
                         entryIncoming.andNot(fromOut);
                     }
                 }
 
-                // Find loop exits
+                //
+                // Find loop exits (their outgoing edges respectively)
+                //
+                // Determine the outgoing edges of the target node of the current edge.
                 BitSet out = outgoing[edge.tgt.getId()];
+                // A loop exit has by definition at least two outgoing edges (one inside the loop and one to outside.
                 if (out.cardinality() >= 2) {
+                    // Determine those outgoing edges that are *not* in the loop.
                     BitSet toOut = (BitSet) out.clone();
-                    toOut.andNot(component);
+                    toOut.andNot(loop);
+
+                    // If this set is *not* empty, then there are outgoing edges to outside the loop.
                     if (!toOut.isEmpty()) {
-                        // Loop outgoing edges.
+                        // edge and e, respectively, are the incoming edge of a loop exit.
+                        // Add the outgoing edges to the set of loop outgoing edges.
                         loopOutgoing.or(toOut);
                         exitOutgoing.or(out);
-                        BitSet cutOut = (BitSet) out.clone();
-                        cutOut.and(component);
-                        cutOutgoing.or(cutOut);
                     }
                 }
             }
 
-            // Create a SCC that includes loop incoming and outgoing edges.
-            BitSet extComponent = (BitSet) component.clone();
-            extComponent.or(loopIncoming);
-            extComponent.or(loopOutgoing);
+            // Create loop fragment that includes loop incoming and outgoing edges.
+            BitSet extendedLoop = (BitSet) loop.clone();
+            extendedLoop.or(loopIncoming);
+            extendedLoop.or(loopOutgoing);
 
             //
             // Step 2.2: Find cutoff edges with a modified depth-first search.
             //
+            // Cutoff edges can only be inner-loop outgoing edges of loop exits.
             BitSet cutoffEdges = (BitSet) exitOutgoing.clone();
             cutoffEdges.andNot(loopOutgoing);
-            cutoffEdges = findCutoffEdges(extComponent, loopIncoming, cutoffEdges, entryIncoming);
-            // Fallback
+            // Reduce the number of cutoff edges to get a connected iteration body.
+            cutoffEdges = findCutoffEdges(extendedLoop, loopIncoming, cutoffEdges, entryIncoming);
+            // Sometimes, cutoff edges cannot be determined to get a good iteration body. In such a case, take an
+            // arbitrary inner-loop outgoing edge of a loop exit as cutoff edges.
             if (cutoffEdges.isEmpty()) {
                 cutoffEdges.or(exitOutgoing);
                 cutoffEdges.andNot(loopOutgoing);
@@ -229,7 +264,7 @@ public class LoopDecomposition  extends Analysis {
             }
 
             //
-            // Step 2.3: Determine the do-body with a data-flow analysis
+            // Step 2.3: Determine the do-body with a data-flow analysis.
             //
             // Set the generation/kill set for each incoming edge.
             HashMap<Integer, BitSet> gen = new HashMap<>();
@@ -239,7 +274,7 @@ public class LoopDecomposition  extends Analysis {
             ArrayList<Integer> workingList = new ArrayList<>();
 
             // Initialize each edge of the component with an empty information set.
-            for (int i = extComponent.nextSetBit(0); i >= 0; i = extComponent.nextSetBit(i + 1)) {
+            for (int i = extendedLoop.nextSetBit(0); i >= 0; i = extendedLoop.nextSetBit(i + 1)) {
                 // An edge is visited
                 edgesVisited++;
 
@@ -271,7 +306,7 @@ public class LoopDecomposition  extends Analysis {
 
                 // Get the outgoing edges
                 BitSet incoming = (BitSet) this.incoming[edges.get(current).src.getId()].clone();
-                incoming.and(extComponent);
+                incoming.and(extendedLoop);
 
                 // Build IN information
                 for (int j = incoming.nextSetBit(0); j >= 0; j = incoming.nextSetBit(j + 1)) {
@@ -292,7 +327,7 @@ public class LoopDecomposition  extends Analysis {
                     // Add outgoing edges
                     // Get the outgoing edges
                     BitSet outgoing = (BitSet) this.outgoing[edges.get(current).tgt.getId()].clone();
-                    outgoing.and(extComponent);
+                    outgoing.and(extendedLoop);
                     for (int j = outgoing.nextSetBit(0); j >= 0; j = outgoing.nextSetBit(j + 1)) {
                         // An edge is visited
                         edgesVisited++;
@@ -304,7 +339,7 @@ public class LoopDecomposition  extends Analysis {
             // Determine the do-body
             // Take a look at the edges and determine the do-body
             BitSet doBodyComponent = new BitSet(edges.size());
-            for (int i = component.nextSetBit(0); i >= 0; i = component.nextSetBit(i + 1)) {
+            for (int i = loop.nextSetBit(0); i >= 0; i = loop.nextSetBit(i + 1)) {
                 // An edge is visited
                 edgesVisited++;
 
@@ -318,7 +353,7 @@ public class LoopDecomposition  extends Analysis {
             //
             // Step 2.4: Derive the loop workflow graph (iteration body)
             //
-            WorkflowGraph iterationBody = createIterationBody(component, cutoffEdges, loopOutgoing);
+            WorkflowGraph iterationBody = createIterationBody(loop, cutoffEdges, loopOutgoing);
             LoopDecomposition loopDecomposition = new LoopDecomposition(iterationBody,
                     this.lastMapIterationBody,
                     reporter,
@@ -329,7 +364,7 @@ public class LoopDecomposition  extends Analysis {
             workflowGraphs.addAll(loopDecomposition.getDecomposition());
 
             // Store the information to reduce the workflow graph later
-            this.loopInformation.add(new LoopInformation(component, doBodyComponent, cutoffEdges, loopIncoming,
+            this.loopInformation.add(new LoopInformation(loop, doBodyComponent, cutoffEdges, loopIncoming,
                     loopOutgoing));
         }
 
@@ -352,7 +387,7 @@ public class LoopDecomposition  extends Analysis {
 
         // Report the number of edges
         reporter.put(this.origin, "NUMBER_VISITED_EDGES_DECOMPOSITION_" + recursionDepth, edgesVisited);
-        reporter.put(this.origin, "NUMBER_LOOPS_" + recursionDepth, components.size());
+        reporter.put(this.origin, "NUMBER_LOOPS_" + recursionDepth, loops.size());
         reporter.put(this.origin, "REDUCED_GRAPH_SIZE_EDGES_" + recursionDepth, graph.getEdges().size());
         reporter.put(this.origin, "REDUCED_GRAPH_SIZE_NODES_" + recursionDepth, graph.getNodeListInclusive().size());
 
@@ -470,73 +505,139 @@ public class LoopDecomposition  extends Analysis {
     }
 
     /**
-     * Reduces the workflow graph by loops.
+     * Reduces the workflow graph by replacing its loops.
      * @param graph The workflow graph.
      * @return The reduced workflow graph.
      */
     protected WorkflowGraph reduce(WorkflowGraph graph) {
         // Create a new workflow graph for the reduced workflow.
         WorkflowGraph reduced = new WorkflowGraph();
+        // Create a map for its nodes.
         HashMap<Integer, WGNode> nodes = new HashMap<>(this.map.length);
 
+        // Collect all edges that should be removed from the original workflow graph.
         BitSet eliminate = null;
         for (LoopInformation loopInformation: this.loopInformation) {
+            this.edgesVisited++;
+            // Initialize the set.
             if (eliminate == null) eliminate = (BitSet) loopInformation.component.clone();
+            // Add the loop.
             else eliminate.or(loopInformation.component);
+            // And remove those edges from the do body.
             eliminate.andNot(loopInformation.doBody);
         }
 
         // Copy the workflow graph without the edges (and corresponding nodes) to eliminate.
         for (Edge edge : graph.getEdges()) {
-            edgesVisited++;
+            this.edgesVisited++;
             if (!eliminate.get(edge.id)) {
-                WGNode src = getOrCreate(edge.src, reduced, nodes);
-                WGNode tgt = getOrCreate(edge.tgt, reduced, nodes);
+                WGNode src = this.getOrCreate(edge.src, reduced, nodes);
+                WGNode tgt = this.getOrCreate(edge.tgt, reduced, nodes);
                 src.addSuccessor(tgt);
                 tgt.addPredecessor(src);
             }
         }
 
+        // For each loop ...
         for (LoopInformation loopInformation: this.loopInformation) {
-            // Add loop node (combination of merge and split in this case)
+            this.edgesVisited++;
+            // ... (1) Add loop node (combination of merge and split in this case)
             WGNode merge = new WGNode(this.getNextFreeId(), (loopInformation.loopIn.cardinality() == 1 ? WGNode.Type.ACTIVITY : WGNode.Type.MERGE));
             WGNode split = new WGNode(this.getNextFreeId(), (loopInformation.loopOut.cardinality() == 1 ? WGNode.Type.ACTIVITY : WGNode.Type.SPLIT));
 
+            // The merge is before the split.
             merge.addSuccessor(split);
             split.addPredecessor(merge);
 
-            // Add edges TO the loop node
-            for (int i = loopInformation.cutoff.nextSetBit(0); i >= 0; i = loopInformation.cutoff.nextSetBit(i + 1)) {
-                edgesVisited++;
-                WGNode exit = edges.get(i).src;
+            // ... (2) Add edges TO the loop node (i.e., to the merge).
+            // We need an edge to the merge only for cutoff edges.
+            for (int c = loopInformation.cutoff.nextSetBit(0); c >= 0; c = loopInformation.cutoff.nextSetBit(c + 1)) {
+                this.edgesVisited++;
+                // Get the corresponding loop exit node.
+                WGNode exit = edges.get(c).src;
+                // Determine those incoming edges of the loop exit that actually are within the do-body.
                 BitSet used = (BitSet) this.incoming[exit.getId()].clone();
                 used.and(loopInformation.doBody);
 
+                // The exit is actually used (reached) in the do-body.
                 if (!used.isEmpty()) {
-                    WGNode src = getOrCreate(exit, reduced, nodes);
+                    // Get or create the node that represents the loop exit.
+                    WGNode src = this.getOrCreate(exit, reduced, nodes);
+                    // If the merge contains already this exit as predecessor, then there are multiple edges
+                    // coming from this loop exit to the loop node.
+                    // We introduce a task (an activity in mojo slang) in this case between the loop exit and the loop
+                    // node (merge).
                     if (merge.getPredecessorsBitSet().get(src.getId())) {
+                        // Create the task ...
                         WGNode activity = new WGNode(this.getNextFreeId(), WGNode.Type.ACTIVITY);
                         nodes.put(activity.getId(), activity);
                         reduced.addNode(activity);
+                        // ... add it as successor of the loop exit ...
                         src.addSuccessor(activity);
                         activity.addPredecessor(src);
+                        // And set the task to the loop exit.
                         src = activity;
                     }
+                    // Add the merge as successor.
                     src.addSuccessor(merge);
                     merge.addPredecessor(src);
                 }
             }
 
-            // Add edges FROM the loop node
-            for (int i = loopInformation.loopOut.nextSetBit(0); i >= 0; i = loopInformation.loopOut.nextSetBit(i + 1)) {
-                edgesVisited++;
-                WGNode exit = edges.get(i).src;
+            // ... (3) Add edges FROM the loop node (i.e., from the split).
+            // We need an edge from the split only for loop outgoing edges.
+            for (int o = loopInformation.loopOut.nextSetBit(0); o >= 0; o = loopInformation.loopOut.nextSetBit(o + 1)) {
+                this.edgesVisited++;
+                // TODO: New
+                // Get the source (the loop exit) and the target of the loop outgoing edge.
+                WGNode src = this.getOrCreate(edges.get(o).src, reduced, nodes);
+                WGNode tgt = this.getOrCreate(edges.get(o).tgt, reduced, nodes);
+
+                // Determine if some incoming edge of the target is within the do-body.
+                BitSet used = (BitSet) this.incoming[tgt.getId()].clone();
+                used.and(loopInformation.doBody);
+
+                if (used.isEmpty() || tgt.getType() == WGNode.Type.MERGE) {
+                    // The target is *not* reached by the do-body (therefore unconnected) ...
+                    // ... or it is already a merge.
+                    split.addSuccessor(tgt);
+                    tgt.addPredecessor(split);
+                } else {
+                    // We have to introduce a new merge in front of the target
+                    WGNode helpMerge = new WGNode(this.getNextFreeId(), WGNode.Type.MERGE);
+                    nodes.put(helpMerge.getId(), helpMerge);
+                    reduced.addNode(helpMerge);
+
+                    if (!used.isEmpty()) {
+                        // Remove old information.
+                        src.removeSuccessor(tgt);
+                        tgt.removePredecessor(src);
+
+                        // Add the help merge as successor of the loop exit (src).
+                        src.addSuccessor(helpMerge);
+                        helpMerge.addPredecessor(src);
+                    }
+
+                    // Add the help merge as successor of the split node
+                    split.addSuccessor(helpMerge);
+                    helpMerge.addPredecessor(split);
+
+                    // Set the target as successor of the help merge.
+                    helpMerge.addSuccessor(tgt);
+                    tgt.addPredecessor(helpMerge);
+                }
+
+                /*
+                // THIS PART IS STRANGE.
+
+                // Determine if this loop outgoing edge is within the do-body.
                 BitSet used = (BitSet) this.incoming[exit.getId()].clone();
                 used.and(loopInformation.doBody);
 
-                if (used.get(i)) {
-                    WGNode src = getOrCreate(edges.get(i).src, reduced, nodes);
-                    WGNode tgt = getOrCreate(edges.get(i).tgt, reduced, nodes);
+
+                if (used.get(o)) {
+                    WGNode src = this.getOrCreate(edges.get(o).src, reduced, nodes);
+                    WGNode tgt = this.getOrCreate(edges.get(o).tgt, reduced, nodes);
                     if (tgt.getType() != WGNode.Type.MERGE) {
                         // We have to introduce a new merge
                         WGNode helpMerge = new WGNode(this.getNextFreeId(), WGNode.Type.MERGE);
@@ -555,33 +656,32 @@ public class LoopDecomposition  extends Analysis {
                         helpMerge.addSuccessor(tgt);
                         tgt.addPredecessor(helpMerge);
                     } else {
-                        /*src.addSuccessor(tgt);
-                        tgt.addPredecessor(src);*/
                         split.addSuccessor(tgt);
                         tgt.addPredecessor(split);
                     }
                 } else {
-                    WGNode tgt = getOrCreate(edges.get(i).tgt, reduced, nodes);
+                    WGNode tgt = getOrCreate(edges.get(o).tgt, reduced, nodes);
                     split.addSuccessor(tgt);
                     tgt.addPredecessor(split);
-                }
+                }*/
             }
 
-            // Set the type of merge
+            // Set the final type of merge
             merge.setType(merge.getPredecessors().size() == 1 ? WGNode.Type.ACTIVITY : WGNode.Type.MERGE);
             nodes.put(merge.getId(), merge);
             reduced.addNode(merge);
-            // Set the type of split
+            // Set the final type of split
             split.setType(split.getSuccessors().size() == 1 ? WGNode.Type.ACTIVITY : WGNode.Type.SPLIT);
             nodes.put(split.getId(), split);
             reduced.addNode(split);
 
             // Correct the nodes previously being merges or splits
-            correctNodes(reduced, nodes.values(), loopInformation.component);
+            this.correctNodes(reduced, nodes.values(), loopInformation.component);
         }
 
         // Finalize the workflow graph.
-        this.lastMap = createNodeMap(nodes.values());
+        this.lastMap = this.createNodeMap(nodes.values());
+        // Perform an edge analysis.
         EdgeAnalysis edgeAnalysis = new EdgeAnalysis(reduced, lastMap, reporter);
         edgeAnalysis.compute();
 
@@ -602,6 +702,13 @@ public class LoopDecomposition  extends Analysis {
         }
     }
 
+    /**
+     * Creates the iteration body out of the loop.
+     * @param component The component (the original loop).
+     * @param cutoff The set of cutoff edges.
+     * @param loopOut The set of edges going out of the loop.
+     * @return The iteration body workflow graph.
+     */
     protected WorkflowGraph createIterationBody(BitSet component, BitSet cutoff, BitSet loopOut) {
         return this.createIterationBody(component, cutoff,  loopOut, false);
     }
@@ -611,11 +718,14 @@ public class LoopDecomposition  extends Analysis {
      * @param component The component (the original loop).
      * @param cutoff The set of cutoff edges.
      * @param loopOut The set of edges going out of the loop.
+     * @param isFragment Whether the iteration body is a fragment.
      * @return The iteration body workflow graph.
      */
     protected WorkflowGraph createIterationBody(BitSet component, BitSet cutoff, BitSet loopOut, boolean isFragment) {
+        // Create a new workflow graph for the iteration body (fragment).
         WorkflowGraph graph = new WorkflowGraph();
         HashMap<Integer, WGNode> nodes = new HashMap<>(this.map.length);
+        // Store the maximum id locally since the ids can be recycled.
         int maxId = this.maxId;
 
         // Create a new start node
@@ -623,13 +733,19 @@ public class LoopDecomposition  extends Analysis {
         nodes.put(start.getId(), start);
         graph.setStart(start);
 
+        // If there are more than 1 cutoff edges, the fragment has more than one start node.
+        // Remember: All start nodes are exclusive.
         if (cutoff.cardinality() >= 2) {
+            // Create a split in this case ...
             WGNode split = new WGNode(maxId++, WGNode.Type.SPLIT);
             nodes.put(split.getId(), split);
             graph.addNode(split);
 
+            // ... connect it to the start ...
             start.addSuccessor(split);
             split.addPredecessor(start);
+
+            // ... and use it as a start.
             start = split;
         }
 
@@ -638,67 +754,85 @@ public class LoopDecomposition  extends Analysis {
         nodes.put(end.getId(), end);
         graph.setEnd(end);
 
+        // If there is more than 1 cutoff edge or loop-outgoing edge, the fragment has more than one end node.
+        // Remember: All end nodes are exclusive.
         if (cutoff.cardinality() + loopOut.cardinality() >= 2) {
+            // Create a merge in this case ...
             WGNode merge = new WGNode(maxId++, WGNode.Type.MERGE);
             nodes.put(merge.getId(), merge);
             graph.addNode(merge);
 
+            // ... connect it with the end ...
             merge.addSuccessor(end);
             end.addPredecessor(merge);
 
+            // ... and use it as end.
             end = merge;
         }
 
+        // A set to store targets of cutoff edges within the loop.
         BitSet fromCut = new BitSet(component.size());
+        // A set to store sources of cutoff and loop outgoing edges of loops.
         BitSet toCutOut = new BitSet(component.size());
 
         // Copy each element of the component
         for (int i = component.nextSetBit(0); i >= 0; i = component.nextSetBit(i + 1)) {
-            edgesVisited++;
+            this.edgesVisited++;
 
+            // Get the edge.
             Edge edge = edges.get(i);
+            // If it is a cutoff edge ...
             if (cutoff.get(i)) {
+                // ... and it is not a fragment ...
                 if (!isFragment) {
                     // The source and target.
-                    WGNode newSrc = getOrCreate(edges.get(i).src, graph, nodes);
-                    WGNode newTgt = getOrCreate(edges.get(i).tgt, graph, nodes);
+                    WGNode newSrc = this.getOrCreate(edges.get(i).src, graph, nodes);
+                    WGNode newTgt = this.getOrCreate(edges.get(i).tgt, graph, nodes);
 
-                    // Connect them
+                    // ... connect it to the start and end.
                     start.addSuccessor(newTgt);
                     newTgt.addPredecessor(start);
                     end.addPredecessor(newSrc);
                     newSrc.addSuccessor(end);
                 }
             } else {
+                // ... else copy it.
+                // Copy the src and target.
                 WGNode src = edge.src;
                 WGNode tgt = edge.tgt;
-                WGNode newSrc = getOrCreate(src, graph, nodes);
-                WGNode newTgt = getOrCreate(tgt, graph, nodes);
+                WGNode newSrc = this.getOrCreate(src, graph, nodes);
+                WGNode newTgt = this.getOrCreate(tgt, graph, nodes);
 
+                // Connect them.
                 newSrc.addSuccessor(newTgt);
                 newTgt.addPredecessor(newSrc);
 
-                BitSet in = incoming[newSrc.getId()];
+                // Check if the source of the edge is the target of a cutoff edge.
+                BitSet in = this.incoming[newSrc.getId()];
                 in = (BitSet) in.clone();
                 in.and(cutoff);
                 fromCut.or(in);
 
-                BitSet out = outgoing[newTgt.getId()];
+                // Check if the target of the edge is the source of a cutoff or loop outgoing edge.
+                BitSet out = this.outgoing[newTgt.getId()];
                 BitSet cutClone = (BitSet) cutoff.clone();
                 cutClone.or(loopOut);
                 cutClone.and(out);
                 toCutOut.or(cutClone);
             }
         }
+        // If it is a fragment.
         if (isFragment) {
             ArrayList<WGNode> newNodes = new ArrayList<>();
+            // For each edge being the target of a cutoff edge in the fragment.
             for (int i = fromCut.nextSetBit(0); i >= 0; i = fromCut.nextSetBit(i + 1)) {
-                edgesVisited++;
-                // The target.
+                this.edgesVisited++;
+                // Create the target node.
                 WGNode newTgt = getOrCreate(edges.get(i).tgt, graph, nodes);
 
-                // Connect them
+                // Connect it with the start node ...
                 if (start.getSuccessorsBitSet().get(newTgt.getId())) {
+                    // ... and introduce a new task / activity between them if necessary.
                     WGNode activity = new WGNode(maxId++, WGNode.Type.ACTIVITY);
                     newNodes.add(activity);
                     graph.addNode(activity);
@@ -709,13 +843,15 @@ public class LoopDecomposition  extends Analysis {
                 start.addSuccessor(newTgt);
                 newTgt.addPredecessor(start);
             }
+            // For each edge being the source of a cutoff edge or loop outgoing edge in the fragment.
             for (int i = toCutOut.nextSetBit(0); i >= 0; i = toCutOut.nextSetBit(i + 1)) {
-                edgesVisited++;
-                // The source.
+                this.edgesVisited++;
+                // Create the source node.
                 WGNode newSrc = getOrCreate(edges.get(i).src, graph, nodes);
 
-                // Connect them
+                // Connect it with the end node ...
                 if (end.getPredecessorsBitSet().get(newSrc.getId())) {
+                    // ... and introduce a new task / activity between them if necessary.
                     WGNode activity = new WGNode(maxId++, WGNode.Type.ACTIVITY);
                     newNodes.add(activity);
                     graph.addNode(activity);
@@ -726,25 +862,17 @@ public class LoopDecomposition  extends Analysis {
                 end.addPredecessor(newSrc);
                 newSrc.addSuccessor(end);
             }
+            // Add the newly created nodes to the node list.
             for (WGNode node: newNodes) {
                 nodes.put(node.getId(), node);
             }
         }
 
-        // Introduce a merge and end node for each outgoing edge.
-        /*for (int i = loopOut.nextSetBit(0); i >= 0; i = loopOut.nextSetBit(i + 1)) {
-            edgesVisited++;
-
-            // Get the source.
-            WGNode newSrc = getOrCreate(edges.get(i).src, graph, nodes);
-            newSrc.addSuccessor(end);
-            end.addPredecessor(newSrc);
-        }*/
-
-        correctNodes(graph, nodes.values(), component);
+        // Correct nodes that are broken.
+        this.correctNodes(graph, nodes.values(), component);
 
         // Finalize the workflow graph.
-        this.lastMapIterationBody = createNodeMap(nodes.values());
+        this.lastMapIterationBody = this.createNodeMap(nodes.values());
         EdgeAnalysis edgeAnalysis = new EdgeAnalysis(graph, this.lastMapIterationBody, reporter);
         edgeAnalysis.compute();
 
@@ -794,6 +922,7 @@ public class LoopDecomposition  extends Analysis {
 
     /**
      * Correct nodes by setting their type from join/merge/split/fork to activity if necessary.
+     * In doing this, rule 4 from the paper - each broken join must be an XOR- or OR-join - is checked.
      * @param graph The workflow graph.
      * @param nodes The nodes.
      * @param component The component.
@@ -801,12 +930,14 @@ public class LoopDecomposition  extends Analysis {
     private void correctNodes(WorkflowGraph graph, Collection<WGNode> nodes, BitSet component) {
         // Correct nodes
         for (WGNode node: nodes) {
-            edgesVisited++;
+            this.edgesVisited++;
             if (node != null) {
+                // An XOR, OR, or AND join becomes an activity.
                 if (node.getType() == WGNode.Type.JOIN || node.getType() == WGNode.Type.MERGE ||
                         node.getType() == WGNode.Type.OR_JOIN) {
                     if (node.getPredecessors().size() == 1) {
                         if (node.getType() == WGNode.Type.JOIN) {
+                            // It is a deadlock situation.
                             DeadlockCycleAnnotation annotation = new DeadlockCycleAnnotation(this);
                             annotation.addFailureNode(node);
                             annotation.addInvolvedNode(node);
@@ -815,14 +946,15 @@ public class LoopDecomposition  extends Analysis {
 
                             errors.add(annotation);
                             reporter.add(graph, AnalysisInformation.NUMBER_DEADLOCKS_LOOP, 1);
-                            //reporter.endIgnoreTimeMeasurement(graph, this.getClass().getName());
                         }
+                        // The node is removed and added as an activity (task).
                         graph.removeNode(node);
                         node.setType(WGNode.Type.ACTIVITY);
                         graph.addNode(node);
                     }
                 } else if (node.getType() == WGNode.Type.SPLIT) {
                     if (node.getSuccessors().size() == 1) {
+                        // The node is removed and added as an activity (task).
                         graph.removeNode(node);
                         node.setType(WGNode.Type.ACTIVITY);
                         graph.addNode(node);
