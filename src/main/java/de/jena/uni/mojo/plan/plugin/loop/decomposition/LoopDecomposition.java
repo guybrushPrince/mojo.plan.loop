@@ -589,81 +589,37 @@ public class LoopDecomposition extends Analysis {
             for (int o = loopInformation.loopOut.nextSetBit(0); o >= 0; o = loopInformation.loopOut.nextSetBit(o + 1)) {
                 this.edgesVisited++;
                 // TODO: New
-                // Get the source (the loop exit) and the target of the loop outgoing edge.
-                WGNode src = this.getOrCreate(edges.get(o).src, reduced, nodes);
+                // Get the target of the loop outgoing edge.
                 WGNode tgt = this.getOrCreate(edges.get(o).tgt, reduced, nodes);
 
-                // Determine if some incoming edge of the target is within the do-body.
-                BitSet used = (BitSet) this.incoming[tgt.getId()].clone();
-                used.and(loopInformation.doBody);
-
-                if (used.isEmpty() || tgt.getType() == WGNode.Type.MERGE) {
-                    // The target is *not* reached by the do-body (therefore unconnected) ...
-                    // ... or it is already a merge.
-                    split.addSuccessor(tgt);
-                    tgt.addPredecessor(split);
-                } else {
+                // We have to insert a merge if the loop outgoing edge is reached by the do-body
+                // and the target is not a merge node.
+                if (loopInformation.doBody.get(o) && tgt.getType() != WGNode.Type.MERGE) {
                     // We have to introduce a new merge in front of the target
                     WGNode helpMerge = new WGNode(this.getNextFreeId(), WGNode.Type.MERGE);
                     nodes.put(helpMerge.getId(), helpMerge);
                     reduced.addNode(helpMerge);
 
-                    if (!used.isEmpty()) {
-                        // Remove old information.
-                        src.removeSuccessor(tgt);
-                        tgt.removePredecessor(src);
+                    // Get the source (the loop exit)
+                    WGNode src = this.getOrCreate(edges.get(o).src, reduced, nodes);
 
-                        // Add the help merge as successor of the loop exit (src).
-                        src.addSuccessor(helpMerge);
-                        helpMerge.addPredecessor(src);
-                    }
+                    // Remove old information.
+                    src.removeSuccessor(tgt);
+                    tgt.removePredecessor(src);
 
-                    // Add the help merge as successor of the split node
-                    split.addSuccessor(helpMerge);
-                    helpMerge.addPredecessor(split);
+                    // Add the help merge as successor of the loop exit (src).
+                    src.addSuccessor(helpMerge);
+                    helpMerge.addPredecessor(src);
 
                     // Set the target as successor of the help merge.
                     helpMerge.addSuccessor(tgt);
                     tgt.addPredecessor(helpMerge);
+
+                    // Now the target is the new merge.
+                    tgt = helpMerge;
                 }
-
-                /*
-                // THIS PART IS STRANGE.
-
-                // Determine if this loop outgoing edge is within the do-body.
-                BitSet used = (BitSet) this.incoming[exit.getId()].clone();
-                used.and(loopInformation.doBody);
-
-
-                if (used.get(o)) {
-                    WGNode src = this.getOrCreate(edges.get(o).src, reduced, nodes);
-                    WGNode tgt = this.getOrCreate(edges.get(o).tgt, reduced, nodes);
-                    if (tgt.getType() != WGNode.Type.MERGE) {
-                        // We have to introduce a new merge
-                        WGNode helpMerge = new WGNode(this.getNextFreeId(), WGNode.Type.MERGE);
-                        nodes.put(helpMerge.getId(), helpMerge);
-
-                        reduced.addNode(helpMerge);
-                        src.removeSuccessor(tgt);
-                        tgt.removePredecessor(src);
-
-                        src.addSuccessor(helpMerge);
-                        helpMerge.addPredecessor(src);
-
-                        split.addSuccessor(helpMerge);
-                        helpMerge.addPredecessor(split);
-
-                        helpMerge.addSuccessor(tgt);
-                        tgt.addPredecessor(helpMerge);
-                    } else {
-                        split.addSuccessor(tgt);
-                        tgt.addPredecessor(split);
-                    }
-                } else {
-                    WGNode tgt = getOrCreate(edges.get(o).tgt, reduced, nodes);
-                    split.addSuccessor(tgt);
-                    tgt.addPredecessor(split);
-                }*/
+                split.addSuccessor(tgt);
+                tgt.addPredecessor(split);
             }
 
             // Set the final type of merge
@@ -682,7 +638,7 @@ public class LoopDecomposition extends Analysis {
         // Finalize the workflow graph.
         this.lastMap = this.createNodeMap(nodes.values());
         // Perform an edge analysis.
-        EdgeAnalysis edgeAnalysis = new EdgeAnalysis(reduced, lastMap, reporter);
+        EdgeAnalysis edgeAnalysis = new EdgeAnalysis(reduced, this.lastMap, reporter);
         edgeAnalysis.compute();
 
         return reduced;

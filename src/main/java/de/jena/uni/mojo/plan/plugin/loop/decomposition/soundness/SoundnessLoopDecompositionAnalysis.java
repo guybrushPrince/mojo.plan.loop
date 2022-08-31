@@ -223,8 +223,10 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
                 BitSet outgoing = (BitSet) this.outgoing[edges.get(cur).tgt.getId()].clone();
                 // ... remove the cutoff edges from it ...
                 outgoing.andNot(cutoffEdges);
-                // ... and already visited edges.
+                // ... and already visited edges ...
                 outgoing.andNot(doBody);
+                // TODO: ... and only those within the (extended) loop.
+                outgoing.and(extendedLoop);
                 // Add the remaining outgoing edges as part of the do-body and to the working list.
                 doBody.or(outgoing);
                 workingList.or(outgoing);
