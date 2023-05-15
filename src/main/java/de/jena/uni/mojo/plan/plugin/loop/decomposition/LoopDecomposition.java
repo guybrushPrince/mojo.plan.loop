@@ -27,13 +27,15 @@ import de.jena.uni.mojo.error.Annotation;
 import de.jena.uni.mojo.error.DeadlockCycleAnnotation;
 import de.jena.uni.mojo.model.WGNode;
 import de.jena.uni.mojo.model.WorkflowGraph;
+import de.jena.uni.mojo.model.sub.Data;
 
 import java.util.*;
 
 /**
  * Class LoopDecomposition.
  * Extends a mojo analysis and performs a loop decomposition on a workflow graph described in the paper
- * ""
+ * "Understanding and Decomposing Control-Flow Loops in Business Process Models"
+ * by Thomas M. Prinz, Yongsun Choi, and N. Long Ha, BPM 2022, pp. 307-323
  * @author Dr. Dipl.-Inf. Thomas M. Prinz
  */
 public class LoopDecomposition extends Analysis {
@@ -852,6 +854,7 @@ public class LoopDecomposition extends Analysis {
         for (WGNode node: nodes) {
             this.edgesVisited++;
             length = Math.max(node.getId(), length) + 1;
+            node.setExtraInformation(new Data(nodes.size()));
         }
         WGNode[] map = new WGNode[length];
         for (WGNode node : nodes) {

@@ -27,15 +27,19 @@ import de.jena.uni.mojo.model.WorkflowGraph;
 import de.jena.uni.mojo.plan.ControlFlowAnalysisPlan;
 import de.jena.uni.mojo.plan.plugin.loop.decomposition.LoopDecomposition;
 import de.jena.uni.mojo.plan.plugin.loop.decomposition.LoopInformation;
+import de.jena.uni.mojo.plan.plugin.loop.errors.EntryANDAnnotation;
+import de.jena.uni.mojo.plan.plugin.loop.errors.ExitNotXORAnnotation;
+import de.jena.uni.mojo.plan.plugin.loop.errors.LivelockAnnotation;
 import de.jena.uni.mojo.util.store.ElementStore;
 
 import java.util.*;
 
 /**
  * Class SoundnessLoopDecompositionAnalysis.
- * Extends a loop decomposition by performing a soundness analysis afterwards and modifying the cutoff edges, etc.
+ * Modifies a loop decomposition to perform an efficient soundness check for process models with inclusive gateways.
  * For more details take a look in:
- * ""
+ * "Soundness Unknotted: Efficient Algorithm for Process Models with Inclusive Gateways by Loosening Loops"
+ * by Thomas M. Prinz, Yongsun Choi, and N. Long Ha (unpublished yet)
  * @author Dr. Dipl.-Inf. Thomas M. Prinz
  */
 public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
@@ -44,6 +48,11 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
      * A serial version UID.
      */
     private static final long serialVersionUID = 7120671292823189427L;
+
+    /**
+     * The name to identify different versions after decomposition.
+     */
+    private String name = "graph";
 
     /**
      * Constructor. This is used for external usage (as entry to the analysis).
@@ -55,6 +64,7 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
     public SoundnessLoopDecompositionAnalysis(WorkflowGraph graph, WGNode[] map, AnalysisInformation reporter,
                                               ElementStore store) {
         super(graph, map, reporter);
+        this.name = reporter.get(origin, "subgraph") + "";
     }
 
     /**
@@ -66,8 +76,9 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
      * @param recursionDepth The recursion depth.
      */
     private SoundnessLoopDecompositionAnalysis(WorkflowGraph graph, WGNode[] map, AnalysisInformation reporter,
-                                               WorkflowGraph origin, int recursionDepth) {
+                                               WorkflowGraph origin, int recursionDepth, String name) {
         super(graph, map, reporter, origin, recursionDepth);
+        this.name = name;
     }
 
     @Override
@@ -76,9 +87,13 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
         // perfectly.
         if (this.origin != this.graph) {
             reporter.put(graph, AnalysisInformation.FILE_NAME, reporter.get(origin, AnalysisInformation.FILE_NAME));
+            reporter.put(graph, "subgraph", reporter.get(origin, "subgraph"));
         }
-        // Report the recursion depth.
-        reporter.put(graph, "RECURSION_DEPTH", recursionDepth);
+        // Report the recursion depth and some other statistics.
+        reporter.put(graph, "recursion_depth", recursionDepth);
+        reporter.put(graph, "name", this.name);
+        reporter.put(graph, "nodes", graph.getNodeListInclusive().size());
+        reporter.put(graph, "edges", graph.getEdges().size());
 
         // Determine the largest id to assign new ids.
         this.maxId = graph.getNodeSet().size();
@@ -103,20 +118,6 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
             ControlFlowAnalysisPlan soundnessAnalysis = new ControlFlowAnalysisPlan(graph, map, reporter);
             errors.addAll(soundnessAnalysis.compute());
 
-            // Add everything if the graph is not the original workflow graph.
-            if (origin != graph) {
-                for (Annotation error: errors) {
-                    this.edgesVisited++;
-                    if (error instanceof DeadlockAnnotation) {
-                        reporter.add(origin, AnalysisInformation.NUMBER_DEADLOCKS, 1);
-                        reporter.add(origin, AnalysisInformation.NUMBER_DEADLOCKS_NORMAL, 1);
-                    } else if (error instanceof AbundanceAnnotation) {
-                        reporter.add(origin, AnalysisInformation.NUMBER_LACK_OF_SYNCHRONIZATION, 1);
-                        reporter.add(origin, AnalysisInformation.NUMBER_LACK_OF_SYNCHRONIZATION_NORMAL, 1);
-                    }
-                }
-            }
-
             // Add the workflow graph to the list of workflow graphs and return the errors.
             workflowGraphs.add(graph);
             return errors;
@@ -132,6 +133,7 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
         //
         // Define sets thar are recycled.
         BitSet exitOutgoing = new BitSet(edges.size());
+        int loopNumber = 0;
         for (BitSet loop : loops) {
             this.edgesVisited++;
             exitOutgoing.clear();
@@ -188,6 +190,25 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
                         exitOutgoing.or(out);
                     }
                 }
+            }
+
+            // Check if there is any loop-outgoing (or cutoff) edge.
+            if (exitOutgoing.isEmpty()) {
+                LivelockAnnotation annotation = new LivelockAnnotation(this);
+                annotation.addPathToFailure(loop);
+
+                errors.add(annotation);
+                reporter.add(graph, "livelocks", 1);
+                // This error is crucial since loop decomposition cannot be performed.
+                return errors;
+            }
+            if (loopIncoming.isEmpty()) {
+                NoStartAnnotation annotation = new NoStartAnnotation(this);
+
+                errors.add(annotation);
+                reporter.add(graph, "loop_without_entry", 1);
+                // This error is crucial since loop decomposition cannot be performed.
+                return errors;
             }
 
             //
@@ -320,7 +341,8 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
                         this.lastMapIterationBody,
                         reporter,
                         this.graph,
-                        this.recursionDepth + 1);
+                        this.recursionDepth + 1,
+                        this.name + ">" + loopNumber);
                 // All errors, etc., are reported to the current workflow graph.
                 errors.addAll(loopDecomposition.compute());
                 edgesVisited += loopDecomposition.getEdgesVisited();
@@ -329,6 +351,12 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
             // Store information about this loop.
             this.loopInformation.add(new LoopInformation(extendedLoop, doBody, cutoffEdges, loopIncoming,
                     loopOutgoing));
+            loopNumber++;
+            String f = (String) reporter.get(this.graph, "fragments");
+            if (f == null) {
+                f = "[" + fragments.size() + "]";
+            } else f = f.substring(0, f.length() - 1) + "," + fragments.size() + "]";
+            reporter.put(this.graph, "fragments", f);
         }
 
         //
@@ -344,17 +372,25 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
                 this.lastMap,
                 reporter,
                 this.graph,
-                this.recursionDepth + 1);
+                this.recursionDepth + 1,
+                this.name + "R");
         // Report all errors, etc.,  to the original workflow graph.
         errors.addAll(loopDecomposition.compute());
+
         edgesVisited += loopDecomposition.getEdgesVisited();
         workflowGraphs.addAll(loopDecomposition.getDecomposition());
 
+        StringBuilder loopStr = new StringBuilder("[");
+        for (BitSet loop: loops) {
+            loopStr.append(loop.cardinality()).append(",");
+        }
+        reporter.put(this.graph, "loop_size", loopStr.substring(0, loopStr.length() - 1) + "]");
+
         // Report some meta information.
-        reporter.put(this.graph, "NUMBER_VISITED_EDGES_DECOMPOSITION", edgesVisited);
+        reporter.put(this.graph, "edges_decomposition", edgesVisited);
         reporter.put(this.graph, "NUMBER_LOOPS", loops.size());
-        reporter.put(this.graph, "REDUCED_GRAPH_SIZE_EDGES", graph.getEdges().size());
-        reporter.put(this.graph, "REDUCED_GRAPH_SIZE_NODES", graph.getNodeListInclusive().size());
+        reporter.put(this.graph, "reduced_edges", graph.getEdges().size());
+        reporter.put(this.graph, "reduced_nodes", graph.getNodeListInclusive().size());
 
         return errors;
     }
@@ -368,8 +404,10 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
         loopOutgoing = (BitSet) loopOutgoing.clone();
         // Iterate over each edge that leaves the loop.
         // Their source nodes are loop exits that should be XOR splits.
+        int exits = 0;
         for (int o = loopOutgoing.nextSetBit(0); o >= 0; o = loopOutgoing.nextSetBit(o + 1)) {
             this.edgesVisited++;
+            exits++;
             // Get the edge ...
             Edge edge = edges.get(o);
             // ... and the loop exit.
@@ -379,15 +417,20 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
             loopOutgoing.andNot(this.outgoing[exit.getId()]);
             // If the exit is *not* an XOR split (split in mojo slang) there is an error.
             if (exit.getType() != WGNode.Type.SPLIT) {
-                AbundanceCycleAnnotation annotation = new AbundanceCycleAnnotation(this);
+                ExitNotXORAnnotation annotation = new ExitNotXORAnnotation(this);
                 annotation.addInvolvedNode(exit);
                 annotation.addOpeningNode(exit);
                 annotation.addPathToFailure(loop);
 
                 errors.add(annotation);
-                reporter.add(graph, AnalysisInformation.NUMBER_LACK_OF_SYNCHRONIZATION_LOOP, 1);
+                reporter.add(graph, "loop_exit_violations", 1);
             }
         }
+        // State the number of loop exits
+        String repExits = (String) reporter.get(graph, "loop_exits");
+        if (repExits == null) repExits = "[" + exits + "]";
+        else repExits = repExits.substring(0, repExits.length() - 1) + "," + exits + "]";
+        reporter.put(graph, "loop_exits", repExits);
     }
 
     /**
@@ -399,8 +442,10 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
         loopIncoming = (BitSet) loopIncoming.clone();
         // Iterate over edge that enters the loop.
         // Their target nodes are loop entries that should be OR or XOR joins.
+        int entries = 0;
         for (int i = loopIncoming.nextSetBit(0); i >= 0; i = loopIncoming.nextSetBit(i + 1)) {
             this.edgesVisited++;
+            entries++;
             // Get the edge ...
             Edge edge = edges.get(i);
             // ... and the loop entry.
@@ -410,15 +455,19 @@ public class SoundnessLoopDecompositionAnalysis extends LoopDecomposition {
             loopIncoming.andNot(this.incoming[entry.getId()]);
             // If the entry is an AND-join (join in mojo slang) there is an error.
             if (entry.getType() == WGNode.Type.JOIN) {
-                DeadlockCycleAnnotation annotation = new DeadlockCycleAnnotation(this);
-                annotation.addFailureNode(entry);
+                EntryANDAnnotation annotation = new EntryANDAnnotation(this);
                 annotation.addInvolvedNode(entry);
                 annotation.addOpeningNode(entry);
                 annotation.addPathToFailure(loop);
 
                 errors.add(annotation);
-                reporter.add(graph, AnalysisInformation.NUMBER_DEADLOCKS_LOOP, 1);
+                reporter.add(graph, "loop_entry_violations", 1);
             }
         }
+        // State the number of loop entries
+        String repEntries = (String) reporter.get(graph, "loop_entries");
+        if (repEntries == null) repEntries = "[" + entries + "]";
+        else repEntries = repEntries.substring(0, repEntries.length() - 1) + "," + entries + "]";
+        reporter.put(graph, "loop_entries", repEntries);
     }
 }
